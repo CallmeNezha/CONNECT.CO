@@ -1,13 +1,14 @@
-var svg, tooltip, isTransitioning, colorScale;
+var svg, tooltip, isTransitioning, colorScale, simulateStart;
 
 var OPACITY = {
-  NODE_DEFAULT: 0.9,
-  NODE_FADED: 0.1,
-  NODE_HIGHLIGHT: 0.8,
-  LINK_DEFAULT: 0.6,
-  LINK_FADED: 0.05,
-  LINK_HIGHLIGHT: 0.9
-},
+    NODE_DEFAULT: 0.9,
+    NODE_FADED: 0.1,
+    NODE_HIGHLIGHT: 0.8,
+    LINK_DEFAULT: 0.6,
+    LINK_FADED: 0.05,
+    LINK_HIGHLIGHT: 0.9
+  },
+  FLOW_COLOR = "#2E86D1",
   OUTER_MARGIN = 10,
   TRANSITION_DURATION = 400,
   MARGIN = {
@@ -17,7 +18,7 @@ var OPACITY = {
     LEFT: OUTER_MARGIN
   },
   HEIGHT = 960 - MARGIN.TOP - MARGIN.BOTTOM,
-  WIDTH = 960 - MARGIN.LEFT - MARGIN.RIGHT,
+  WIDTH = 1266 - MARGIN.LEFT - MARGIN.RIGHT,
   LINK_COLOR = "#b3b3b3",
   TYPES = ["PORT", "ACS", "GPM"],
   TYPE_COLORS = ["#d3d3d3", "#1b9e77", "#d95f02"];
@@ -49,11 +50,40 @@ var links = [
 
 // Used when temporarily disabling user interractions to allow animations to complete
 var disableUserInterractions = function (time) {
-  isTransitioning = true;
-  setTimeout(function () {
-    isTransitioning = false;
-  }, time);
-}
+    isTransitioning = true;
+    setTimeout(function () {
+      isTransitioning = false;
+    }, time);
+  },
+  showTooltip = function (text) {
+    tooltip
+      .style("left", d3.event.pageX + "px")
+      .style("top", d3.event.pageY + 15 + "px")
+      .transition()
+        .duration(TRANSITION_DURATION)
+        .style("opacity", 1);
+    tooltip.select(".value").text(text);
+  },
+  hideTooltip = function () {
+    tooltip
+      .transition()
+      .duration(TRANSITION_DURATION)
+        .style("opacity", 0);
+  },
+  /**
+  * Returns a random number between min (inclusive) and max (exclusive)
+  */
+  getRandomArbitrary = function (min, max) {
+    return Math.random() * (max - min) + min;
+  },
+
+  /**
+  * Returns a random integer between min (inclusive) and max (inclusive)
+  * Using Math.round() will give you a non-uniform distribution!
+  */
+  getRandomInt = function (min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
 
 
 
@@ -67,6 +97,9 @@ svg.append("g").attr("id", "links");
 svg.append("g").attr("id", "nodes");
 
 tooltip = d3.select("#chart").append("div").attr("id", "tooltip");
+tooltip.style("opacity", 0)
+  .append("p")
+    .attr("class", "value");
 
 defs = svg.append("defs");
 
@@ -92,6 +125,18 @@ function update() {
   function drawNodes(data) {
     node = svg.select("#nodes").selectAll(".node")
       .data(nodeSankey.nodes(), function (d) { return d.id; });
+
+    node.select("rect")
+      .style("fill", function (d) {
+        return colorScale(d.type);
+      })
+      .style("stroke", function (d) {
+        return d3.rgb(colorScale(d.type)).darker(0.1);
+      })
+      .style("opacity", OPACITY.NODE_DEFAULT)
+      .style("stroke-width", "1px")
+      .attr("height", function (d) { return d.height; })
+      .attr("width", nodeSankey.nodeWidth());
     node.select(".ports").selectAll("rect")
       .data(function (d) { return d.portPositions; })
       .style("stroke", function (d) { return colorScale("port"); })
@@ -118,20 +163,81 @@ function update() {
     
     link.style("stroke-width", function (d) { return Math.max(1, d.thickness); })
       .attr("d", path)
+      .style("stoke", LINK_COLOR)
       .style("opacity", OPACITY.LINK_DEFAULT);
   }
 
   function dragmove(node) {
+    if (isTransitioning) return;
     node.x = Math.max(0, Math.min(WIDTH - node.width, d3.event.x));
     node.y = Math.max(0, Math.min(HEIGHT - node.height, d3.event.y));
     d3.select(this).attr("transform", "translate(" + node.x + "," + node.y + ")");
     nodeSankey.relayout();
-    drawNodes(nodeSankey.nodes());
-    drawLinks(nodeSankey.links());
-    
-    // svg.selectAll(".node").selectAll("rect").attr("height", function (d) { return d.height; });
-    // link.attr("d", path);
+    drawNodes();
+    link.data(nodeSankey.links())
+      .attr("d", path);
   }
+
+  function restoreLinksAndNodes() {
+    node
+      .transition()
+      .duration(TRANSITION_DURATION)
+      .style("opacity", OPACITY.NODE_DEFAULT);
+    link.style("stroke", LINK_COLOR)
+      .transition()
+      .duration(TRANSITION_DURATION)
+      .style("opacity", OPACITY.LINK_DEFAULT);
+  }
+
+  function highlightConnected(g) {
+
+    link.filter(function (d) { return d.source == g.id || d.target == g.id; })
+      .style("stroke", FLOW_COLOR)
+      .style("opacity", OPACITY.LINK_DEFAULT);
+
+  }
+
+  simulateStart = function () {
+    isTransitioning = true;
+    var forward = false
+      , BOUNCE_DURATION = 2500;
+    function repeat() {
+      forward = !forward;
+      link
+        .style("stroke", FLOW_COLOR)
+        .style("opacity", OPACITY.LINK_DEFAULT)
+        .attr("stroke-dasharray", "5 3")
+        .attr("stroke-dashoffset", forward ? 0 : BOUNCE_DURATION)
+        .transition()
+          .ease("linear")
+          .duration(BOUNCE_DURATION)
+          .attr("stroke-dashoffset", forward ? BOUNCE_DURATION : 0)
+        .each("end", repeat);
+    }
+    repeat();
+      
+  };
+
+  simulateEnd = function () {
+    isTransitioning = false;
+    link
+      .transition()
+      .style("stroke", LINK_COLOR)
+      .style("opacity", OPACITY.LINK_DEFAULT)
+      .attr("stroke-dasharray", null)
+      .attr("stroke-dashoffset", null);
+  };
+
+  function fadeUnconnected(g) {
+    link.filter(function (d) { return d.source != g.id && d.target != g.id; })
+      .transition()
+      .style("stroke", LINK_COLOR)
+      .style("opacity", OPACITY.LINK_FADED);
+    node.filter(function (d) { return d.id == g.id ? false : !g.connectedNodes.includes(d.id); })
+      .transition()
+      .style("opacity", OPACITY.NODE_FADED);
+  }
+
 
   node = svg.select("#nodes").selectAll(".node")
     .data(nodeSankey.nodes(), function (d) { return d.id; });
@@ -177,6 +283,22 @@ function update() {
     .attr("dy", "-0.3em")
     .attr("text-anchor", "middle")
     .attr("transform", null);
+
+  nodeEnter.on("mouseenter", function (g) {
+    if (!isTransitioning) {
+      restoreLinksAndNodes();
+      highlightConnected(g);
+      fadeUnconnected(g);
+      showTooltip("ID:" + g.id + " - NAME:" + g.name);
+    }
+  });
+
+  nodeEnter.on("mouseleave", function () {
+    if (!isTransitioning) {
+      hideTooltip();
+      restoreLinksAndNodes();
+    }
+  });
 
   ports = nodeEnter.append("g").attr("class", "ports");
   port = ports.selectAll(".port").data(function (d) {
@@ -242,4 +364,18 @@ disableUserInterractions(2 * TRANSITION_DURATION);
 
 update();
 
+var toggleSimulate = (function () {
+  return function () {
+    if (d3.select("#btnSimulate").select("input").property("checked")) {
+      simulateStart();
+      // console.log(d3.select("#btnSimulate").select("input").property("checked"));
+    } 
+    else {
+      simulateEnd();
+      // console.log(d3.select("#btnSimulate").select("input").property("checked"));
+    }
+  };
+})();
 
+d3.select("#btnSimulate")
+  .attr("onChange", "toggleSimulate()");
