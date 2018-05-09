@@ -340,7 +340,7 @@ function update() {
      */
     activatedLinksSet = new Set();
 
-    activateLinks = function (inPorts, outPorts) {
+    activateLinks = function (inPorts, outPorts, active_duration, stiffness) {
       link.filter((d) => {
           var srcport, dstport;
           [srcport, dstport] = d.id.split('-');
@@ -360,10 +360,10 @@ function update() {
         })
         .style("stroke", (d) => d.direction == 1 ? OUT_FLOW_COLOR : IN_FLOW_COLOR)
         .attr("stroke-dasharray", "5 3")
-        .attr("stroke-dashoffset", 100)
+        .attr("stroke-dashoffset", stiffness)
         .transition()
           .ease("linear")
-          .duration(1000)
+          .duration(active_duration)
           .attr("stroke-dashoffset", 0)
         .transition()
           .duration(0)
