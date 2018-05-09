@@ -5,17 +5,28 @@
     <link href="style.css" rel="stylesheet">
   </head>
   <body>
-    <p>Simulate</p>
-    <label id="btnSimulate" class="switch">
-      <input type="checkbox">
-      <span class="slider round"></span>
-    </label>
-    
+    <button id="demo" value="demo">demo</button>
     <div id="chart"></div>
-
-    
-    <script src="http://d3js.org/d3.v3.min.js"></script>
+    <script src="jquery-3.3.1.slim.min.js"></script>
+    <script src="d3.v3.min.js"></script>
     <script src="nodeSankey.js"></script>
+    <script src="input.js"></script>
     <script src="app.js"></script>
   </body>
+
+  <script>
+    var inPorts = new Set();
+    var outPorts = new Set();
+    inPorts.add("1:4");
+    inPorts.add("1:5");
+    outPorts.add("2:5");
+
+    function demo () {
+      activateLinks(inPorts, outPorts);
+    }
+
+    simulateStart();
+  
+    $("#demo").click(demo);
+  </script>
 </html>

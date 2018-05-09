@@ -1,4 +1,7 @@
-var svg, tooltip, isTransitioning, colorScale, simulateStart;
+var svg, tooltip, isTransitioning, colorScale,
+  nodes, links,
+  simulateStart, simulateEnd, activateLinks, activatedLinksSet
+  
 
 var OPACITY = {
     NODE_DEFAULT: 0.9,
@@ -8,7 +11,8 @@ var OPACITY = {
     LINK_FADED: 0.05,
     LINK_HIGHLIGHT: 0.9
   },
-  FLOW_COLOR = "#2E86D1",
+  IN_FLOW_COLOR = "#d95f02",
+  OUT_FLOW_COLOR = "#1b9e77",
   OUTER_MARGIN = 10,
   TRANSITION_DURATION = 400,
   MARGIN = {
@@ -20,42 +24,169 @@ var OPACITY = {
   HEIGHT = 960 - MARGIN.TOP - MARGIN.BOTTOM,
   WIDTH = 1266 - MARGIN.LEFT - MARGIN.RIGHT,
   LINK_COLOR = "#b3b3b3",
-  TYPES = ["PORT", "ACS", "GPM"],
+  TYPES = ["PORT", "ACS", "NODE"],
   TYPE_COLORS = ["#d3d3d3", "#1b9e77", "#d95f02"];
 
+
+function scatter(range, operation) {
+  var array;
+  range = range.sort((a, b) => a - b);
+  array = new Array(range.length-1);
+  range.forEach(function (arr, i) {
+    array[i] = operation(range[i], range[i+1]);
+  });
+  return array;
+}
+
+function gather(array2d, step) {
+  var i,
+    length = Math.ceil(array2d.length / step);
+    array = new Array(length);
+  for (i=0; i<length; ++i) {
+    if (i == length - 1 && array2d.length % step != 0) { // last one and not evenly sliced
+      array[i] = d3.merge(array2d.slice(i*step, i*step + array2d.length % step))
+      break;
+    }
+    array[i] = d3.merge(array2d.slice(i*step, i*step+step));
+  }
+  return array;
+}
+
+function topoStrParse(topoStr) {
+  var topo = topoStr.split(',')
+    , nodes = []
+    , links = []
+    , i = 0
+    , id = 0
+    , switches = new Set()
+    , swJoints
+  
+  // fetch switches node and rename with id
+  topo.forEach( (_, i) => {
+    var switchId;
+    if (topo[i].indexOf("#") == 0 && topo[i] != "#*" && !switches.has(topo[i+1])) {
+      switchId = topo[i+1];
+      id = Math.max(id, switchId);
+      switches.add(switchId);
+      nodes.push({ "type": "ACS", "id": switchId, "name": "ACS" + switchId, "port": 24 });
+      topo[i+1] = switchId.toString();
+    }
+  });
+  // fetch node
+  topo.forEach( (_, i) => {
+    if (topo[i].indexOf("#") == 0 && topo[i] != "#*") {
+      ++id;
+      nodes.push( { "type": "NODE", "id": id, "name": topo[i].substring(1), "port":1, "charater": topo[i+3] });
+      links.push( { "id":id+":"+0+"-"+Number(topo[i+1])+":"+Number(topo[i+2]), "source":id, "srcport":0, "target":Number(topo[i+1]), "tarport":Number(topo[i+2]), "thickness":2 } );
+    }
+  });
+  //
+  swJoints = topo.slice(topo.findIndex(elem => elem == "#*"));
+  links.push(
+    { "id":nodes[0].id+":"+swJoints[1]+"-"+nodes[1].id+":"+swJoints[3], 
+    "source":nodes[0].id, 
+    "srcport":Number(swJoints[1]),
+    "target":nodes[1].id, 
+    "tarport":Number(swJoints[3]), 
+    "thickness":2 
+    });
+
+  links.forEach( (val) => {
+    links.push({
+      "id": val.target+":"+val.tarport+"-"+val.source+":"+val.srcport,
+      "source": val.target,
+      "srcport": val.tarport,
+      "target": val.source,
+      "tarport": val.srcport,
+      "thickness": val.thickness
+    })
+  });
+
+  return [nodes, links]
+}
+
+function linkScheduleStrParse(scheduleStr, duration, sampling) {
+  /**
+   * timeQueue 2D-Array index = [ 
+   *  [receive_time, cpu_id, switch_id&&port_id&&direction, message_id, message_size], 
+   *  [...], 
+   *   ... 
+   *  ]
+   *  array length == duration * sampling
+   */
+
+  var schedule = scheduleStr.split("\n")
+    .filter((e) => e.length != 0 && e[0] != "#")
+    .map((el) => el.split(',').map((_el) => Number(_el)));
+
+  schedule = schedule.map((el) => {
+    var switchId = Math.floor(el[2] / 1000),
+      switchPort = Math.floor((el[2] % 1000) / 10),
+      direction = el[2] % 10 == 2 ? 1 : -1; // 1 means switch sent message, -1 vice versa
+
+    return { "time": el[0],
+      "cpu": el[1],
+      "switch": switchId,
+      "port": switchPort,
+      "direction": direction,
+      "messageId": el[3],
+      "size": el[4]
+    }
+  });
+  
+  var i, tick, ticks_, timeQueue;
+
+  schedule.sort((a, b) => a.time - b.time);
+  timeScale = d3.scale.linear()
+    .domain([0, duration * sampling])
+    .range([schedule[0].time, schedule[schedule.length - 1].time]);
+
+  ticks_ = d3.range(duration * sampling).map((i) => timeScale(i));
+
+  i = 0;
+  timeQueue = scatter(ticks_, (a, b) => {
+    var time,
+      elems = []
+    for (; i<schedule.length; ++i) {
+      time = schedule[i].time;
+      if (time >= a && time < b) {
+        elems.push(i);
+      } else {
+        break;
+      }
+    }
+    return elems;
+  });
+  return [schedule, timeQueue];
+}
+
+
+function linkDelayStrParse(delayStr, duration, sampling) {
+  var delay = delayStr.split("\n")
+    .filter((e) => e.length != 0 && e[0] != "#")
+    .map((el) => el.split(',').map((_el) => Number(_el)));
+
+  delay = delay.map((el) => {
+    return {
+      "time": el[0],
+      "messageId": el[1],
+      "delay": el[2]
+    } });
+  
+  delay.sort((a, b) => a.time - b.time);
+  
+  
+}
+
+
 colorScale = d3.scale.ordinal().domain(TYPES).range(TYPE_COLORS);
+[nodes, links] = topoStrParse(input.topo_str);
 
 
-var nodes = [
-  { "type": "ACS", "id": 1, "name": "ACS1", "port": 24 },
-  { "type": "ACS", "id": 2, "name": "ACS2", "port": 24 },
-  { "type": "GPM", "id": 3, "name": "GPM1", "port": 2 },
-  { "type": "GPM", "id": 4, "name": "GPM2", "port": 2 },
-  { "type": "GPM", "id": 5, "name": "GPM3", "port": 2 },
-  { "type": "GPM", "id": 6, "name": "GPM4", "port": 2 },
-  { "type": "GPM", "id": 7, "name": "GPM5", "port": 2 },
-  { "type": "GPM", "id": 8, "name": "GPM6", "port": 2 },
-  { "type": "GPM", "id": 9, "name": "GPM7", "port": 2 },
-]
 
-var links = [
-  { "source": 1, "srcport": 1, "target": 3, "tarport": 1, "thickness": 3},
-  { "source": 1, "srcport": 3, "target": 2, "tarport": 1, "thickness": 3},
-  { "source": 1, "srcport": 4, "target": 2, "tarport": 2, "thickness": 3},
-  { "source": 2, "srcport": 3, "target": 5, "tarport": 1, "thickness": 3},
-  { "source": 2, "srcport": 4, "target": 6, "tarport": 1, "thickness": 3},
-  { "source": 7, "srcport": 0, "target": 2, "tarport": 14, "thickness": 3},
-  { "source": 5, "srcport": 0, "target": 1, "tarport": 13, "thickness": 3},
-]
 
 // Used when temporarily disabling user interractions to allow animations to complete
-var disableUserInterractions = function (time) {
-    isTransitioning = true;
-    setTimeout(function () {
-      isTransitioning = false;
-    }, time);
-  },
-  showTooltip = function (text) {
+var showTooltip = function (text) {
     tooltip
       .style("left", d3.event.pageX + "px")
       .style("top", d3.event.pageY + 15 + "px")
@@ -191,34 +322,65 @@ function update() {
 
   function highlightConnected(g) {
 
-    link.filter(function (d) { return d.source == g.id || d.target == g.id; })
-      .style("stroke", FLOW_COLOR)
+    link.filter(function (d) { return d.source == g.id; })
+      .style("stroke", IN_FLOW_COLOR)
+      .style("opacity", OPACITY.LINK_DEFAULT);
+
+    link.filter(function (d) { return d.target == g.id; })
+      .style("stroke", OUT_FLOW_COLOR)
       .style("opacity", OPACITY.LINK_DEFAULT);
 
   }
 
-  simulateStart = function () {
+  simulateStart = function() {
     isTransitioning = true;
-    var forward = false
-      , BOUNCE_DURATION = 2500;
-    function repeat() {
-      forward = !forward;
-      link
-        .style("stroke", FLOW_COLOR)
-        .style("opacity", OPACITY.LINK_DEFAULT)
+    /**
+     * @param inPorts - set() contains "{switchId}:{port}"
+     * @param outPorts - set() contains "{switchId}:{port}"
+     */
+    activatedLinksSet = new Set();
+
+    activateLinks = function (inPorts, outPorts) {
+      link.filter((d) => {
+          var srcport, dstport;
+          [srcport, dstport] = d.id.split('-');
+          if (activatedLinksSet.has(srcport) || activatedLinksSet.has(dstport)) {
+            return false;
+          } else if (outPorts.has(srcport)) {
+            d.direction = 1;
+            activatedLinksSet.add(srcport);
+            return true;
+          } else if (inPorts.has(dstport)) {
+            d.direction = -1;
+            activatedLinksSet.add(dstport);
+            return true;
+          } else {
+            return false;
+          }
+        })
+        .style("stroke", (d) => d.direction == 1 ? OUT_FLOW_COLOR : IN_FLOW_COLOR)
         .attr("stroke-dasharray", "5 3")
-        .attr("stroke-dashoffset", forward ? 0 : BOUNCE_DURATION)
+        .attr("stroke-dashoffset", 100)
         .transition()
           .ease("linear")
-          .duration(BOUNCE_DURATION)
-          .attr("stroke-dashoffset", forward ? BOUNCE_DURATION : 0)
-        .each("end", repeat);
-    }
-    repeat();
-      
+          .duration(1000)
+          .attr("stroke-dashoffset", 0)
+        .transition()
+          .duration(0)
+          .style("stroke", LINK_COLOR)
+          .style("opacity", OPACITY.LINK_DEFAULT)
+          .attr("stroke-dasharray", null)
+          .attr("stroke-dashoffset", null)
+        .each("end", (d) => {
+          var srcport, dstport;
+          [srcport, dstport] = d.id.split('-');
+          activatedLinksSet.delete(srcport);
+          activatedLinksSet.delete(dstport);
+        });
+    };  
   };
 
-  simulateEnd = function () {
+  simulateEnd = function() {
     isTransitioning = false;
     link
       .transition()
@@ -318,6 +480,7 @@ function update() {
 
   linkEnter = link.enter().append("path")
     .attr("class", "link")
+    .attr("id", function(d) { return d.id; })
     .style("fill", "none");
 
   linkEnter.transition()
@@ -337,11 +500,6 @@ function update() {
 
   link.exit().remove();
 
-
-  
-  
-
-  
 }
 
 nodeSankey = d3.nodeSankey();
@@ -360,22 +518,5 @@ nodeSankey
 
 path = nodeSankey.link().curvature(0.45);
 
-disableUserInterractions(2 * TRANSITION_DURATION);
-
 update();
 
-var toggleSimulate = (function () {
-  return function () {
-    if (d3.select("#btnSimulate").select("input").property("checked")) {
-      simulateStart();
-      // console.log(d3.select("#btnSimulate").select("input").property("checked"));
-    } 
-    else {
-      simulateEnd();
-      // console.log(d3.select("#btnSimulate").select("input").property("checked"));
-    }
-  };
-})();
-
-d3.select("#btnSimulate")
-  .attr("onChange", "toggleSimulate()");

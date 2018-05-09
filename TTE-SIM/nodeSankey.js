@@ -99,6 +99,13 @@ d3.nodeSankey = function() {
           }
         });
       });
+      links.forEach(function (link) {
+        if (nodeMap[link.source].x < nodeMap[link.target].x) {
+          link.direction = 1;
+        } else {
+          link.direction = -1;
+        }
+      });
     }
 
 
@@ -157,7 +164,7 @@ d3.nodeSankey = function() {
       nodes.filter(function (node) { return node.type == "ACS"; })
         .forEach(function (node, index) { node.x = 500; node.y = index * (node.height + 8); });
       
-      nodes.filter(function (node) { return node.type == "GPM"; })
+      nodes.filter(function (node) { return node.type == "NODE"; })
         .forEach(function (node, index) { node.x = 200; node.y = index * (node.height + 8); });
 
       computeLeftAndRightLinks();
@@ -175,16 +182,16 @@ d3.nodeSankey = function() {
       function leftToRightLink(link) {
         var arrowHeadLength = link.thickness * arrowheadScaleFactor,
             straightSectionLength = (3 * link.thickness / 4) - arrowHeadLength,
-            sourceY = link.source.portPositions[link.srcport][1] + linkWidth / 4,
-            targetY = link.target.portPositions[link.tarport][1] + linkWidth / 4,
+            sourceY = link.source.portPositions[link.srcport][1] + linkWidth / 2,
+            targetY = link.target.portPositions[link.tarport][1] + linkWidth / 2,
             x0 = link.source.x + link.source.width,
             x1 = x0 + arrowHeadLength / 2,
             x4 = link.target.x - straightSectionLength - arrowHeadLength,
             xi = d3.interpolateNumber(x0, x4),
             x2 = xi(curvature),
             x3 = xi(1 - curvature),
-            y0 = link.source.y + sourceY + link.thickness / 2,
-            y1 = link.target.y + targetY + link.thickness / 2;
+            y0 = link.source.y + sourceY - link.thickness / 2,
+            y1 = link.target.y + targetY - link.thickness / 2;
         return "M" + x0 + "," + y0
              + "L" + x1 + "," + y0
              + "C" + x2 + "," + y0
@@ -196,8 +203,8 @@ d3.nodeSankey = function() {
       function rightToLeftLink(link) {
         var arrowHeadLength = link.thickness * arrowheadScaleFactor,
             straightSectionLength = link.thickness / 4,
-            sourceY = link.source.portPositions[link.srcport][1] + linkWidth / 4,
-            targetY = link.target.portPositions[link.tarport][1] + linkWidth / 4,
+            sourceY = link.source.portPositions[link.srcport][1] + linkWidth / 2,
+            targetY = link.target.portPositions[link.tarport][1] + linkWidth / 2,
             x0 = link.source.x,
             x1 = x0 - arrowHeadLength / 2,
             x4 = link.target.x + link.target.width + straightSectionLength + arrowHeadLength,
